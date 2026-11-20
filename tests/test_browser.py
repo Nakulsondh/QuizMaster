@@ -2,55 +2,86 @@
 from playwright.sync_api import expect
 
 
-def test_player_can_complete_quiz_and_view_leaderboard(
-    browser, live_server, browser_app
-):
-    # Create a quiz and question for this browser test.
-    with browser_app.test_client() as client:
-        quiz_response = client.post("/api/quizzes", json={
-            "title": "Browser Test Quiz",
-            "difficulty": "easy",
-            "category": "General",
-        })
-        assert quiz_response.status_code == 201
-        quiz_id = quiz_response.get_json()["id"]
+def test_complete_quiz_flow(browser, live_server, browser_app):
+    # Create test data in the separate browser database.
+    client = browser_app.test_client()
 
+    quiz_response = client.post("/api/quizzes", json={
+        "title": "Playwright Test Quiz",
+        "difficulty": "easy",
+        "category": "General",
+    })
+
+    assert quiz_response.status_code < 400
+    quiz_id = quiz_response.get_json()["id"]
+
+    # Create 10 questions.
+    for number in range(1, 11):
         question_response = client.post(
             f"/api/quizzes/{quiz_id}/questions",
             json={
-                "text": "What is 1 + 1?",
-                "option_a": "1",
-                "option_b": "2",
-                "option_c": "3",
-                "option_d": "4",
-                "correct_option": "B",
+                "text": f"Test question {number}",
+                "option_a": "Correct answer",
+                "option_b": "Wrong answer 1",
+                "option_c": "Wrong answer 2",
+                "option_d": "Wrong answer 3",
+                "correct_option": "A",
             },
         )
-        assert question_response.status_code == 201
 
-    # Open the homepage and start the quiz.
+        assert question_response.status_code < 400
+
     page = browser.new_page()
-    page.goto(live_server)
 
-    page.get_by_role("link", name="Open quiz").click()
+    try:
+        # 1. Open the home page.
+        page.goto(live_server)
+        expect(page.locator("body")).to_be_visible()
 
-    page.locator("#player-name").fill("Asha")
-    page.get_by_role("button", name="Start quiz").click()
+        # 2. Open the test quiz.
+        page.locator(f'[data-quiz-id="{quiz_id}"]').click()
 
-    # Answer the question and submit.
-    page.get_by_label("B. 2").check()
-    page.get_by_role("button", name="Submit").click()
+        expect(page.locator("#start-form")).to_be_visible()
 
-    # Verify the result page.
-    expect(page.locator("#result-name")).to_have_text("Well done, Asha")
-    expect(page.locator("#result-score")).to_have_text(
-        "You scored 1 out of 1"
-    )
+        # 3. Enter the player's name and start the quiz.
+        player_name = "Playwright Tester"
 
-    # Open the leaderboard and verify the player's entry.
-    page.locator("#leaderboard-link").click()
+        page.locator("#player-name").fill(player_name)
+        page.locator('#start-form button[type="submit"]').click()
 
-    expect(page.locator("#leaderboard-body tr")).to_have_count(1)
-    expect(page.locator("#leaderboard-body")).to_contain_text("Asha")
+        expect(page.locator("#question-box")).to_be_visible()
 
-    page.close()
+        # 4. Answer all 10 questions.
+        for question_number in range(1, 11):
+            expect(page.locator("#progress")).to_have_text(
+                f"Question {question_number} of 10"
+            )
+
+            page.locator("#option-A").check()
+
+            if question_number < 10:
+                page.locator("#next-button").click()
+
+        # 5. Submit the quiz on the final question.
+        expect(page.locator("#submit-button")).to_be_visible()
+        page.locator("#submit-button").click()
+
+        # 6. Verify the result page.
+        page.wait_for_url("**/result")
+
+        expect(page.locator("#result-box")).to_be_visible()
+        expect(page.locator("#result-name")).to_contain_text(player_name)
+        expect(page.locator("#result-score")).to_contain_text("10 out of 10")
+        expect(page.locator("#result-correct")).to_contain_text("10")
+        expect(page.locator("#result-wrong")).to_contain_text("0")
+
+        # 7. Open the leaderboard.
+        page.locator("#leaderboard-link").click()
+
+        page.wait_for_url(f"**/leaderboard?quiz={quiz_id}")
+
+        expect(page.locator("#leaderboard-table")).to_be_visible()
+        expect(page.locator("#leaderboard-body")).to_contain_text(player_name)
+
+    finally:
+        page.close()
